@@ -1,0 +1,17 @@
+---
+github_host: github.example.com
+
+backup_utils_repo_url: https://github.com/github/backup-utils.git
+backup_utils_version: master
+
+backup_utils_home_dir: /home/admin
+backup_utils_dir: /home/admin/backup-utils
+backup_utils_data_dir: /home/admin/backup-utils/data
+backup_utils_create_data_dir: "yes"
+
+# How many snapshots to keep
+backup_utils_retention: 10
+
+backup_utils_log_name: backup-verbose.log
+
+backup_utils_es_audit_logs: "no"

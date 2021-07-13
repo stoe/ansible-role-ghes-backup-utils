@@ -1,0 +1,102 @@
+---
+- name: Install dependencies
+  # https://docs.ansible.com/ansible/package_module.html
+  apt:
+    name: "{{ packages }}"
+    state: present
+    update_cache: true
+  vars:
+    packages:
+      - git
+      - openssh-client
+      - jq
+      - rsync
+  become: yes
+
+- name: Configure motd (message of the day)
+  # https://docs.ansible.com/ansible/copy_module.html
+  copy:
+    src: motd.j2
+    dest: /etc/motd
+  become: yes
+
+- name: Clone {{ backup_utils_repo_url }}
+  # http://docs.ansible.com/ansible/git_module.html
+  git:
+    repo: "{{ backup_utils_repo_url }}"
+    dest: "{{ backup_utils_dir }}"
+    version: "{{ backup_utils_version }}"
+
+- name: Create backup utils data directory
+  # http://docs.ansible.com/ansible/file_module.html
+  file:
+    state: directory
+    path: "{{ backup_utils_data_dir }}"
+
+- name: Generate SSH key for admin
+  # http://docs.ansible.com/ansible/user_module.html
+  user:
+    name: "{{ ansible_user }}"
+    generate_ssh_key: yes
+    ssh_key_bits: 2048
+    ssh_key_file: .ssh/id_rsa
+  register: ssh_rsa
+
+- name: Add SSH key to {{ github_host }}
+  # http://docs.ansible.com/ansible/authorized_key_module.html
+  authorized_key:
+    user: admin
+    key: "{{ ssh_rsa.ssh_public_key }}"
+    state: present
+    comment: "{{ inventory_hostname }}"
+  # We will need to look at this delegation, as it makes the role inflexible
+  delegate_to: primary
+
+- name: Copy in backup-utils config
+  # http://docs.ansible.com/ansible/template_module.html
+  template:
+    src: backup.config.j2
+    dest: "{{ backup_utils_dir }}/backup.config"
+
+- name: Make sure known_hosts file exists
+  # http://docs.ansible.com/ansible/file_module.html
+  file:
+    path: "{{ backup_utils_home_dir }}/.ssh/known_hosts"
+    state: touch
+    owner: admin
+    group: admin
+    mode: 0644
+  register: known_hosts
+  failed_when:
+    - not known_hosts.state == "file"
+
+- name: Add primary {{ github_host }} to known_hosts
+  # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/shell_module.html
+  shell: "ssh-keyscan -4 -p 122 -H {{ github_host }} >> {{ backup_utils_home_dir }}/.ssh/known_hosts"
+  register: backup_utils_ssh_keyscan
+  changed_when:
+    - backup_utils_ssh_keyscan.rc == 0
+  failed_when:
+    - backup_utils_ssh_keyscan.rc > 0
+
+- name: Check host
+  # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/shell_module.html
+  shell: "{{ backup_utils_dir }}/bin/ghe-host-check"
+  register: backup_utils_host_check
+  changed_when:
+    - '"Connect" in backup_utils_host_check.stdout'
+    - '"OK" in backup_utils_host_check.stdout'
+  failed_when:
+    - backup_utils_host_check.rc > 0
+
+- name: Kick off backup (async)
+  # https://docs.ansible.com/ansible/latest/collections/ansible/builtin/shell_module.html
+  shell: "{{ backup_utils_dir }}/bin/ghe-backup -v"
+  # Dont wait for the command to finish
+  # https://docs.ansible.com/ansible/latest/user_guide/playbooks_async.html#concurrent-tasks-poll-0
+  async: 1000
+  poll: 0
+  register: backup_utils_run_backup
+  changed_when: true
+  # This fails sometimes, so let's ignore the errors and fix them manually if it fails
+  ignore_errors: true
